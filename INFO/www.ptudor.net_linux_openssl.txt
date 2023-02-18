@@ -1,0 +1,211 @@
+OpenSSL 1.0.1h for CentOS 6
+
+August 2013: Updating the CentOS/RedHat 6.4 RPM for OpenSSL 1.0.1e.
+June 2014: Updating the CentOS/RedHat 6.5 RPM for OpenSSL 1.0.1h.
+2016: How to undo the mess the last admin left you with:
+
+Go to a mirror. Find the appropriate RPM, download it. This command will replace it. Beware the admin who also hand-built 
+OpenSSH, it might break.
+
+rpm -ivh --replacefiles --oldpackage openssl-* && yum -y update
+
+Now, to the historical document, after a quick copy of an error that might lead someone here...
+
+Error: Package: nginx-1.10.1-1.el6.x86_64 (epel)
+           Requires: libcrypto.so.10(OPENSSL_1.0.1_EC)(64bit)
+           Available: openssl-1.0.1e-48.el6.x86_64 (base)
+               libcrypto.so.10(OPENSSL_1.0.1_EC)(64bit)
+           Available: openssl-1.0.1e-48.el6_8.1.x86_64 (updates)
+               libcrypto.so.10(OPENSSL_1.0.1_EC)(64bit)
+           Installed: 1:openssl-1.0.1l-1.el6.x86_64 (installed)
+               Not found
+Error: Package: ldns-1.6.16-7.el6.2.x86_64 (base)
+           Requires: libcrypto.so.10(OPENSSL_1.0.1_EC)(64bit)
+           Available: openssl-1.0.1e-48.el6.x86_64 (base)
+               libcrypto.so.10(OPENSSL_1.0.1_EC)(64bit)
+           Available: openssl-1.0.1e-48.el6_8.1.x86_64 (updates)
+               libcrypto.so.10(OPENSSL_1.0.1_EC)(64bit)
+           Installed: 1:openssl-1.0.1l-1.el6.x86_64 (installed)
+               Not found
+
+Introduction
+
+This document is about updating the default OpenSSL 1.0.0 to 1.0.1 for TLSv1.2 support and ECC support. Because the SO version 
+remains at 10, it should be a drop-in replacement for programs that dynamically load the library. I also have a tutorial on 
+OpenSSH 6.6p1 for CentOS, open that in a new tab. Email me, ptudor at this domain, with comments and corrections. If you 
+want to help with feeding my dog, I can answer questions.
+
+RHEL6 and variants include OpenSSL 1.0.0, which lacks TLSv1.2 support. Additionally RedHat used to explicitly disable 
+Elliptic Curve Cryptography because of patent licensing concerns. If your project requires FIPS, this is not the guide for you.
+
+In normal cases, I’m the first to advocate never deviating from vendor-supplied packages. But the world is shades of grey. 
+If you’re competent enough to want to upgrade your OpenSSL by hand for whatever reason, be mindful of CVEs and CNEs and 
+new versions. For example, Heartbleed, CVE-2014-0160 for OpenSSL < 1.0.1g.
+
+Also consider buying a hardware RNG like TrueRNG (and if you want to send one to me to play with, that would be cool).
+
+Read about the history of ECC support in RPMs: RedHat Bugzilla about missing ECC
+If download links break in the future, here’s a local copy of referenced files
+As revisions move forward, here’s an archive of old files including 1.0.1e
+And you can read this summarized at StackExchange
+
+Also, CentOS forums.
+
+Read about Hardening Your Web Server’s SSL Ciphers by Hynek Schlawack.
+Since you might be willing to abandon vendor support, consider installing the EPEL mainline kernel too.
+
+Things you see
+
+Things you type
+
+Bonus: Notes on STARTTLS in Sendmail at the end of this document. And OpenSMTPD and Postfix elsewhere on this website.
+Prepare the build environment
+
+If you’ve never built an RPM before, you’ll have to install the programs for compiling and packaging software.
+
+CentOS guide to rebuilding RPMs
+
+Fedora guide to creating RPMs
+
+Install the package group with gcc, the rpm-build package, and some RPMs we’ll need for openssl.
+
+yum -y groupinstall "Development tools"
+yum -y install rpm-build zlib-devel krb5-devel
+mkdir -p /usr/src/redhat/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+echo '%_topdir /usr/src/redhat' > ~/.rpmmacros
+
+Shortcut for lazy people
+
+Download my patched SRPM, build it, and skip to the section called "Run The Build."
+
+wget https://www.ptudor.net/linux/openssl/resources/openssl-1.0.1h-1.el6.src.rpm --no-check-certificate
+echo ef9660473315653dd69e634cee9b91c52692d6032ac5edc64cfa145db8eb2ea4
+openssl dgst -sha256 openssl-1.0.1h-1.el6.src.rpm
+rpm -Uvh openssl-1.0.1h-1.el6.src.rpm
+
+Find a source RPM
+
+At the time of writing this document in Aug 2013, Fedora Core 20 includes OpenSSL 1.0.1f. We’ll use that Source RPM as a 
+template for our RedHat Enterprise Linux 6 support. As RHEL and Fedora don’t include the complete OpenSSL source because 
+of concern for patents, we’ll have to download that as well.
+
+Fedora Mirror List
+
+Location for OpenSSL source code
+
+rpm -Uvh http://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/source/SRPMS/o/openssl-1.0.1e-42.fc21.src.rpm
+cd /usr/src/redhat/SOURCES/
+wget http://www.openssl.org/source/openssl-1.0.1h.tar.gz
+wget http://www.openssl.org/source/openssl-1.0.1h.tar.gz.sha1
+openssl dgst -sha1 openssl-1.0.1h.tar.gz ; cat openssl-1.0.1h.tar.gz.sha1
+
+Did you get a 404 on the RPM download? Check the revision of the software. It may be greater than 15. If it is, also 
+update the spec file patch, from 15 to 16, or 16 to 17, et cetera. Then email me about updating this guide.
+
+Build from the spec file
+
+In short, you can download my unified diff to patch the spec file. If you don’t, and just try building OpenSSL over 
+and over until there’s no errors, I’ve recorded the errors and specific changes further along in this guide. (Sept 
+2013: updated to disable secure_getenv with sed.)
+
+cd /usr/src/redhat/SOURCES/
+sed -i -e "s/secure_getenv/__secure_getenv/g" openssl-1.0.1e-env-zlib.patch
+sed -i -e "s/secure_getenv/__secure_getenv/g" openssl-1.0.1e-fips-ctor.patch
+sed -i -e "s/secure_getenv/__secure_getenv/g" openssl-1.0.1e-no-md5-verify.patch
+cd /usr/src/redhat/SPECS/
+wget http://www.ptudor.net/linux/openssl/resources/openssl-spec-patricktudor-101h.diff
+patch -p1 < openssl-spec-patricktudor-101h.diff
+
+Run the build
+
+With everything prepared, compile the software and package some RPMs:
+
+cd /usr/src/redhat/SPECS/
+time rpmbuild -ba openssl.spec
+
+Install the new RPMs
+
+Now that rpmbuild has completed, we have some files to install.
+
+cd /usr/src/redhat/RPMS/x86_64/
+
+rpm -Fvh openssl-1.0.1h-*.rpm openssl-libs-1.0.1h-*.rpm openssl-devel-1.0.1h-*.rpm
+
+Verify It Works
+
+Let’s make sure it works by listing supported TLS ciphers
+
+openssl ciphers -v 'TLSv1.2' | head -4
+Without TLSv1.2:
+Error in cipher list
+34378884904:error:140E6118:SSL routines:SSL_CIPHER_PROCESS_RULESTR:invalid command
+
+Without ECC:
+
+DHE-DSS-AES256-GCM-SHA384 TLSv1.2 Kx=DH Au=DSS Enc=AESGCM(256) Mac=AEAD
+DHE-RSA-AES256-GCM-SHA384 TLSv1.2 Kx=DH Au=RSA Enc=AESGCM(256) Mac=AEAD
+DHE-RSA-AES256-SHA256 TLSv1.2 Kx=DH Au=RSA Enc=AES(256) Mac=SHA256
+DHE-DSS-AES256-SHA256 TLSv1.2 Kx=DH Au=DSS Enc=AES(256) Mac=SHA256
+
+With ECC:
+
+ECDHE-RSA-AES256-GCM-SHA384 TLSv1.2 Kx=ECDH Au=RSA Enc=AESGCM(256) Mac=AEAD
+ECDHE-ECDSA-AES256-GCM-SHA384 TLSv1.2 Kx=ECDH Au=ECDSA Enc=AESGCM(256) Mac=AEAD
+ECDHE-RSA-AES256-SHA384 TLSv1.2 Kx=ECDH Au=RSA Enc=AES(256) Mac=SHA384
+ECDHE-ECDSA-AES256-SHA384 TLSv1.2 Kx=ECDH Au=ECDSA Enc=AES(256) Mac=SHA384
+If your mailserver is already configured for STARTTLS, it should pick up the changes:
+
+openssl s_client -connect localhost:25 -starttls smtp
+
+Old TLS v1
+
+Protocol : TLSv1
+
+Cipher : DHE-RSA-AES256-SHA
+
+New TLS v1.2
+
+Protocol : TLSv1.2
+
+Cipher : DHE-RSA-AES256-GCM-SHA384
+
+For your webserver, try this:
+
+openssl s_client -connect localhost:443
+curl --silent --trace-ascii - -k -I https://localhost | grep "SSL connection"
+
+== Info: SSL connection using ECDHE-RSA-AES256-GCM-SHA384
+Certificate for Sendmail
+
+You can use an included script to generate a certificate for sendmail and STARTTLS. Let’s increase the lifetime and size of the key.
+cd /etc/pki/tls/certs
+sed -i -e "s/days 365 /days 3653 /g" Makefile
+sed -i -e "s/2048/4096/g" Makefile
+make sendmail.pem
+openssl dhparam -2 -out dh1024.pem 1024
+openssl dhparam -2 -out dh2048.pem 2048
+
+cat dh1024.pem >> sendmail.pem
+
+Sendmail Configuration for STARTTLS
+
+Quick updates to sendmail.mc by removing the prefix of 'dnl' and rebuilding the sendmail.cf file
+m4 sendmail.mc > sendmail.cf
+/etc/init.d/sendmail restart
+define(`confCACERT_PATH', `/etc/pki/tls/certs')dnl
+define(`confCACERT', `/etc/pki/tls/certs/ca-bundle.crt')dnl
+define(`confSERVER_CERT', `/etc/pki/tls/certs/sendmail.pem')dnl
+define(`confSERVER_KEY', `/etc/pki/tls/certs/sendmail.pem')dnl
+define(`confDH_PARAMETERS', `/etc/pki/tls/certs/dh1024.pem')dnl
+
+m4 sendmail.mc > sendmail.cf
+
+/etc/init.d/sendmail restart
+
+Output from /var/log/maillog
+
+before: version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256
+after: version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-GCM-SHA384 bits=256
+
+The end.
+Copyright © 2013 Patrick Tudor
