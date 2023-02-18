@@ -29,7 +29,7 @@ Fetch this updated diff for the spec file, review it, and apply the patch.
 cd /usr/src/redhat/SPECS/
 
 (original url) wget http://www.ptudor.net/linux/openssl/resources/openssl-spec-patricktudor-fc20-19.diff
-(my custom url) wget https://raw.githubusercontent.com/gemuzkm/centos6-openssl/master/SOURCES/openssl-spec-patricktudor-fc20-19.diff
+(my custom url) wget --no-check-certificate https://raw.githubusercontent.com/gemuzkm/centos6-openssl/master/SOURCES/openssl-spec-patricktudor-fc20-19.diff
 
 patch -p1 < openssl-spec-patricktudor-fc20-19.diff
 time rpmbuild -ba openssl.spec
